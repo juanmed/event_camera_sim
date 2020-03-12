@@ -101,7 +101,7 @@ class EventCameraSim(nn.Module):
         # intensity increase generates positive event, otherwise negative event
         self.It_array = x  
         self.t = time 
-        print(len(per_channel_events))
+        #print(len(per_channel_events))
         if len(per_channel_events)>1:
             return per_channel_events
         else:
