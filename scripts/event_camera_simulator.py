@@ -2,6 +2,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
+from tqdm import tqdm
 
 
 class EventCameraSim(nn.Module):
@@ -14,6 +15,10 @@ class EventCameraSim(nn.Module):
         initial_time float timestamp corresponding to the initial image
         C event generation threshold
         """
+        # if is gray image, add one dimension
+        if len(initial_image.shape)==2:
+            initial_image = initial_image.reshape(initial_image.shape[0],initial_image.shape[1],1)
+
         self.C = C
         assert(initial_image.shape[0] > 0)
         assert(initial_image.shape[1] > 0)
@@ -28,12 +33,22 @@ class EventCameraSim(nn.Module):
 
         self.tol = 1e-6  # minimum brightness change for which
                          # an event could be generated
-        self.initial_image = np.zeros_like(initial_image) # initial_image.copy()
 
-    def forward(self,x,time):
+        cols = torch.arange(0,self.width).type(self.It_array.dtype)
+        rows = torch.arange(0,self.height).type(self.It_array.dtype)
+        self.rows,self.cols = torch.meshgrid(rows,cols)
+        #print(self.cols,self.rows)
+
+    def forward(self,x,time):            
+
+        # if is gray image, add one dimension
+        if len(x.shape)==2:
+            x = x.reshape(x.shape[0],x.shape[1],1)
+
         # convert from numpy to torch
         x = torch.from_numpy(x.astype(np.float32))
         x = self.safe_log(x)
+
         assert(x.shape == self.It_array.shape)
 
         delta_t = time - self.t
@@ -43,43 +58,54 @@ class EventCameraSim(nn.Module):
         number_events = torch.floor(torch.abs(torch.div(deltaI, self.C)))
         polarities = torch.where(number_events > 0., torch.sign(deltaI),torch.Tensor([0]))
         slope = torch.div(deltaI,delta_t)
-        channels = x.shape[2]
+        channels = x.shape[-1]
         per_channel_events = list()
 
+        print(" Total events: {}".format(torch.sum(number_events, dim=(0,1))))
         for channel in range(channels):
-            print("Ch: {}".format(channel))
-            #print(deltaI[:,:,channel])
-            print(number_events[:,:,channel] * polarities[:,:,channel])
-            #print(polarities[:,:,channel])
-            #print(torch.max(number_events[:,:,channel]),torch.min(number_events))
+
+            # compute image interpolations
             img_interpolation = torch.ones((x.shape[0],x.shape[1],int(torch.max(number_events[:,:,channel]).item())), dtype = self.It_array.dtype)
             pol = torch.repeat_interleave(polarities[:,:,channel].unsqueeze(2),img_interpolation.shape[-1],dim=2).type(img_interpolation.dtype)
-            #print(pol)#.shape, img_interpolation.shape)
             img_interpolation =torch.mul(img_interpolation, pol)[:,:,:]* torch.arange(1, img_interpolation.shape[-1]+1).type(pol.dtype)*self.C
 
-            #time_events = torch.ones((x.shape[0],x.shape[1],int(torch.max(number_events).item())))
-            #time_events[:,:,:] = time_events[:,:,:] * torch.arange(1, time_events.shape[-1]+1)*C/m
+            # compute time interpolations
             slopes = torch.repeat_interleave(slope[:,:,channel].unsqueeze(2),img_interpolation.shape[-1],dim=2).type(img_interpolation.dtype)
+            start_times = torch.ones_like(img_interpolation)*time
             time_all_events = torch.zeros_like(img_interpolation)
-            time_all_events = torch.where( (torch.abs(pol)>0.), torch.div(img_interpolation,slopes), torch.Tensor([float('nan')]))
-            #print(time_all_events)
+            time_all_events = torch.where((torch.abs(pol)>0.), torch.div(img_interpolation,slopes) + start_times, torch.Tensor([float('nan')]))
             It_arrays = torch.repeat_interleave(self.It_array[:,:,channel].unsqueeze(2),img_interpolation.shape[-1],dim=2).type(img_interpolation.dtype)
             xs = torch.repeat_interleave(x[:,:,channel].unsqueeze(2),img_interpolation.shape[-1],dim=2).type(img_interpolation.dtype)
-            val1 = (pol > 0.) &  ((img_interpolation + It_arrays) < xs)
-            #print((pol>0.) & ((img_interpolation + It_arrays) >= xs) )
+
+            # delete all time interpolations that go beyond the interpolation time
+            val1 = (pol > 0.) & ((img_interpolation + It_arrays) < xs)
             time_events = torch.where( val1, time_all_events, torch.Tensor([float('nan')]) )
             val2 = (pol < 0.) & ((img_interpolation + It_arrays) > xs)
             time_events = torch.where( val2, time_all_events, time_events)
-            #print(img_interpolation + It_arrays)
-            #print(xs)
-            print(time_events)
-            per_channel_events.append(time_events)
 
+            channel_events = list()
+            # construct events
+            j = 0
+            for event_index in tqdm(range(time_events.shape[-1])):
+                events = torch.stack((self.rows,self.cols,time_events[:,:,event_index],polarities[:,:,channel]), dim=2).view(-1,4)
+                #print(events)
+                for e in events:
+                    # if time is not nan, (or there is one single nan element) append this event
+                    if not torch.max(torch.isnan(e)):
+                        channel_events.append(e.tolist())
+                        j = j + 1
 
+            #print("Canal {}, anadidos: {} / {}".format(channel, len(channel_events), j))
+            per_channel_events.append(channel_events)
 
         # intensity increase generates positive event, otherwise negative event
-        self.It_array = x   
-        return x
+        self.It_array = x  
+        self.t = time 
+        print(len(per_channel_events))
+        if len(per_channel_events)>1:
+            return per_channel_events
+        else:
+            return per_channel_events[0]
     
     def safe_log(self,I):
         """
@@ -135,7 +161,7 @@ if __name__ == '__main__':
             break
 
         #works with grayscale images
-        #frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
         timestamp = frame_number*period
 
