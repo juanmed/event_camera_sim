@@ -61,7 +61,7 @@ class EventCameraSim(nn.Module):
         channels = x.shape[-1]
         per_channel_events = list()
 
-        print(" Total events: {}".format(torch.sum(number_events, dim=(0,1))))
+        #print(" Total events: {}".format(torch.sum(number_events, dim=(0,1))))
         for channel in range(channels):
 
             # compute image interpolations
