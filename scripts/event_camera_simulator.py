@@ -86,7 +86,7 @@ class EventCameraSim(nn.Module):
             channel_events = list()
             # construct events
             j = 0
-            for event_index in tqdm(range(time_events.shape[-1])):
+            for event_index in range(time_events.shape[-1]):
                 events = torch.stack((self.rows,self.cols,time_events[:,:,event_index],polarities[:,:,channel]), dim=2).view(-1,4)
                 #print(events)
                 for e in events:
