@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from tqdm import tqdm
+import pandas as pd
 
 
 class EventCameraSim(nn.Module):
@@ -83,17 +84,27 @@ class EventCameraSim(nn.Module):
             val2 = (pol < 0.) & ((img_interpolation + It_arrays) > xs)
             time_events = torch.where( val2, time_all_events, time_events)
 
-            channel_events = list()
+            channel_events = np.array([])
             # construct events
             j = 0
             for event_index in range(time_events.shape[-1]):
-                events = torch.stack((self.rows,self.cols,time_events[:,:,event_index],polarities[:,:,channel]), dim=2).view(-1,4)
-                #print(events)
-                for e in events:
-                    # if time is not nan, (or there is one single nan element) append this event
-                    if not torch.max(torch.isnan(e)):
-                        channel_events.append(e.tolist())
-                        j = j + 1
+                events = torch.stack((self.cols,self.rows,time_events[:,:,event_index],polarities[:,:,channel]), dim=2).view(-1,4).cpu().numpy()
+
+                # for fast drop of rows containing np.nan , use pandas
+                df = pd.DataFrame(events)
+                df = df.dropna(axis = 0, how = 'any')
+                if channel_events.shape[0] == 0:
+                	channel_events = df.to_numpy()
+                else:
+                	channel_events = np.vstack((channel_events,df.to_numpy()))
+
+
+                
+                #for e in events:
+                #    # if time is not nan, (or there is one single nan element) append this event
+                #    if not torch.max(torch.isnan(e)):
+                #        channel_events.append(e.tolist())
+                #        j = j + 1
 
             #print("Canal {}, anadidos: {} / {}".format(channel, len(channel_events), j))
             per_channel_events.append(channel_events)
@@ -102,10 +113,13 @@ class EventCameraSim(nn.Module):
         self.It_array = x  
         self.t = time 
         #print(len(per_channel_events))
-        if len(per_channel_events)>1:
-            return per_channel_events
-        else:
-            return per_channel_events[0]
+
+        return per_channel_events
+        
+        #if len(per_channel_events)>1:
+        #    return per_channel_events
+        #else:
+        #    return per_channel_events[0]
     
     def safe_log(self,I):
         """
